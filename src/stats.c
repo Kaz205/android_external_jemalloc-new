@@ -324,7 +324,7 @@ stats_arena_bins_print(emitter_t *emitter, bool mutex, unsigned i,
 
 	COL_HDR(row, size, NULL, right, 20, size)
 	COL_HDR(row, ind, NULL, right, 4, unsigned)
-	COL_HDR(row, allocated, NULL, right, 13, uint64)
+	COL_HDR(row, allocated, NULL, right, 13, size)
 	COL_HDR(row, nmalloc, NULL, right, 13, uint64)
 	COL_HDR(row, nmalloc_ps, "(#/sec)", right, 8, uint64)
 	COL_HDR(row, ndalloc, NULL, right, 13, uint64)
@@ -1472,6 +1472,40 @@ stats_general_print(emitter_t *emitter) {
 
 	emitter_dict_begin(emitter, "opt", "Run-time option settings");
 
+	/*
+	 * opt.malloc_conf.
+	 *
+	 * Sources are documented in https://jemalloc.net/jemalloc.3.html#tuning
+	 * - (Not Included Here) The string specified via --with-malloc-conf,
+	 *     which is already printed out above as config.malloc_conf
+	 * - (Included) The string pointed to by the global variable malloc_conf
+	 * - (Included) The “name” of the file referenced by the symbolic link
+	 *     named /etc/malloc.conf
+	 * - (Included) The value of the environment variable MALLOC_CONF
+	 * - (Optional, Unofficial) The string pointed to by the global variable
+	 *     malloc_conf_2_conf_harder, which is hidden from the public.
+	 *
+	 * Note: The outputs are strictly ordered by priorities (low -> high).
+	 *
+	 */
+#define MALLOC_CONF_WRITE(name, message)					\
+	if (je_mallctl("opt.malloc_conf."name, (void *)&cpv, &cpsz, NULL, 0) !=	\
+	    0) {								\
+		cpv = "";							\
+	}									\
+	emitter_kv(emitter, name, message, emitter_type_string,	&cpv);
+
+	MALLOC_CONF_WRITE("global_var", "Global variable malloc_conf");
+	MALLOC_CONF_WRITE("symlink", "Symbolic link malloc.conf");
+	MALLOC_CONF_WRITE("env_var", "Environment variable MALLOC_CONF");
+	/* As this config is unofficial, skip the output if it's NULL */
+	if (je_mallctl("opt.malloc_conf.global_var_2_conf_harder",
+	    (void *)&cpv, &cpsz, NULL, 0) == 0) {
+		emitter_kv(emitter, "global_var_2_conf_harder", "Global "
+		    "variable malloc_conf_2_conf_harder", emitter_type_string, &cpv);
+	}
+#undef MALLOC_CONF_WRITE
+
 	OPT_WRITE_BOOL("abort")
 	OPT_WRITE_BOOL("abort_conf")
 	OPT_WRITE_BOOL("cache_oblivious")
@@ -1551,7 +1585,7 @@ stats_general_print(emitter_t *emitter) {
 	OPT_WRITE_CHAR_P("stats_interval_opts")
 	OPT_WRITE_CHAR_P("zero_realloc")
 
-	emitter_dict_end(emitter);
+	emitter_dict_end(emitter); /* Close "opt". */
 
 #undef OPT_WRITE
 #undef OPT_WRITE_MUTABLE

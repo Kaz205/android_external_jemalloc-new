@@ -44,6 +44,10 @@ extern atomic_zu_t zero_realloc_count;
   #define opt_cache_oblivious false
 #endif
 #define opt_debug_double_free_max_scan 0
+extern size_t opt_calloc_madvise_threshold;
+
+extern const char *opt_malloc_conf_symlink;
+extern const char *opt_malloc_conf_env_var;
 
 /* Escape free-fastpath when ptr & mask == 0 (for sanitization purpose). */
 extern uintptr_t san_cache_bin_nonfast_mask;

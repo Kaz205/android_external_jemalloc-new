@@ -24,7 +24,7 @@ struct test_data_s {
 static hpa_shard_opts_t test_hpa_shard_opts_default = {
 	/* slab_max_alloc */
 	ALLOC_MAX,
-	/* hugification threshold */
+	/* hugification_threshold */
 	HUGEPAGE,
 	/* dirty_mult */
 	FXP_INIT_PERCENT(25),
@@ -32,6 +32,21 @@ static hpa_shard_opts_t test_hpa_shard_opts_default = {
 	false,
 	/* hugify_delay_ms */
 	10 * 1000,
+	/* min_purge_interval_ms */
+	5 * 1000,
+};
+
+static hpa_shard_opts_t test_hpa_shard_opts_purge = {
+	/* slab_max_alloc */
+	HUGEPAGE,
+	/* hugification_threshold */
+	0.9 * HUGEPAGE,
+	/* dirty_mult */
+	FXP_INIT_PERCENT(11),
+	/* deferral_allowed */
+	true,
+	/* hugify_delay_ms */
+	0,
 	/* min_purge_interval_ms */
 	5 * 1000,
 };
@@ -84,11 +99,24 @@ TEST_BEGIN(test_alloc_max) {
 	/* Small max */
 	bool deferred_work_generated = false;
 	edata = pai_alloc(tsdn, &shard->pai, ALLOC_MAX, PAGE, false, false,
-	    false, &deferred_work_generated);
+	     /* frequent_reuse */ false, &deferred_work_generated);
 	expect_ptr_not_null(edata, "Allocation of small max failed");
+
 	edata = pai_alloc(tsdn, &shard->pai, ALLOC_MAX + PAGE, PAGE, false,
-	    false, false, &deferred_work_generated);
+	    false, /* frequent_reuse */ false, &deferred_work_generated);
 	expect_ptr_null(edata, "Allocation of larger than small max succeeded");
+
+	edata = pai_alloc(tsdn, &shard->pai, ALLOC_MAX, PAGE, false,
+	    false, /* frequent_reuse */ true, &deferred_work_generated);
+	expect_ptr_not_null(edata, "Allocation of frequent reused failed");
+
+	edata = pai_alloc(tsdn, &shard->pai, HUGEPAGE, PAGE, false,
+	    false, /* frequent_reuse */ true, &deferred_work_generated);
+	expect_ptr_not_null(edata, "Allocation of frequent reused failed");
+
+	edata = pai_alloc(tsdn, &shard->pai, HUGEPAGE + PAGE, PAGE, false,
+	    false, /* frequent_reuse */ true, &deferred_work_generated);
+	expect_ptr_null(edata, "Allocation of larger than hugepage succeeded");
 
 	destroy_test_data(shard);
 }
@@ -273,7 +301,7 @@ TEST_BEGIN(test_alloc_dalloc_batch) {
 	edata_list_active_t allocs_list;
 	edata_list_active_init(&allocs_list);
 	size_t nsuccess = pai_alloc_batch(tsdn, &shard->pai, PAGE, NALLOCS / 2,
-	    &allocs_list, &deferred_work_generated);
+	    &allocs_list, /* frequent_reuse */ false, &deferred_work_generated);
 	expect_zu_eq(NALLOCS / 2, nsuccess, "Unexpected oom");
 	for (size_t i = NALLOCS / 2; i < NALLOCS; i++) {
 		allocs[i] = edata_list_active_first(&allocs_list);
@@ -439,6 +467,36 @@ TEST_BEGIN(test_defer_time) {
 }
 TEST_END
 
+TEST_BEGIN(test_purge_no_infinite_loop) {
+	test_skip_if(!hpa_supported());
+
+	hpa_shard_t *shard = create_test_data(&hpa_hooks_default,
+	    &test_hpa_shard_opts_purge);
+	tsdn_t *tsdn = tsd_tsdn(tsd_fetch());
+
+	/*
+	 * This is not arbitrary value, it is chosen to met hugification
+	 * criteria for huge page and at the same time do not allow hugify page
+	 * without triggering a purge.
+	 */
+	const size_t npages =
+	    test_hpa_shard_opts_purge.hugification_threshold / PAGE + 1;
+	const size_t size = npages * PAGE;
+
+	bool deferred_work_generated = false;
+	edata_t *edata = pai_alloc(tsdn, &shard->pai, size, PAGE,
+	     /* zero */ false, /* guarded */ false, /* frequent_reuse */ false,
+	     &deferred_work_generated);
+	expect_ptr_not_null(edata, "Unexpected alloc failure");
+
+	hpa_shard_do_deferred_work(tsdn, shard);
+
+	/* hpa_shard_do_deferred_work should not stuck in a purging loop */
+
+	destroy_test_data(shard);
+}
+TEST_END
+
 int
 main(void) {
 	/*
@@ -457,5 +515,6 @@ main(void) {
 	    test_alloc_max,
 	    test_stress,
 	    test_alloc_dalloc_batch,
-	    test_defer_time);
+	    test_defer_time,
+	    test_purge_no_infinite_loop);
 }

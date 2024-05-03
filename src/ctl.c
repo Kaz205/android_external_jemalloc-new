@@ -150,12 +150,17 @@ CTL_PROTO(opt_prof_final)
 CTL_PROTO(opt_prof_leak)
 CTL_PROTO(opt_prof_leak_error)
 CTL_PROTO(opt_prof_accum)
+CTL_PROTO(opt_prof_pid_namespace)
 CTL_PROTO(opt_prof_recent_alloc_max)
 CTL_PROTO(opt_prof_stats)
 CTL_PROTO(opt_prof_sys_thread_name)
 CTL_PROTO(opt_prof_time_res)
 CTL_PROTO(opt_lg_san_uaf_align)
 CTL_PROTO(opt_zero_realloc)
+CTL_PROTO(opt_malloc_conf_symlink)
+CTL_PROTO(opt_malloc_conf_env_var)
+CTL_PROTO(opt_malloc_conf_global_var)
+CTL_PROTO(opt_malloc_conf_global_var_2_conf_harder)
 CTL_PROTO(tcache_create)
 CTL_PROTO(tcache_flush)
 CTL_PROTO(tcache_destroy)
@@ -421,6 +426,14 @@ static const ctl_named_node_t	config_node[] = {
 	{NAME("xmalloc"),	CTL(config_xmalloc)}
 };
 
+static const ctl_named_node_t opt_malloc_conf_node[] = {
+	{NAME("symlink"),	CTL(opt_malloc_conf_symlink)},
+	{NAME("env_var"),	CTL(opt_malloc_conf_env_var)},
+	{NAME("global_var"),	CTL(opt_malloc_conf_global_var)},
+	{NAME("global_var_2_conf_harder"),
+	    CTL(opt_malloc_conf_global_var_2_conf_harder)}
+};
+
 static const ctl_named_node_t opt_node[] = {
 	{NAME("abort"),		CTL(opt_abort)},
 	{NAME("abort_conf"),	CTL(opt_abort_conf)},
@@ -487,6 +500,7 @@ static const ctl_named_node_t opt_node[] = {
 	{NAME("prof_leak"),	CTL(opt_prof_leak)},
 	{NAME("prof_leak_error"),	CTL(opt_prof_leak_error)},
 	{NAME("prof_accum"),	CTL(opt_prof_accum)},
+	{NAME("prof_pid_namespace"),	CTL(opt_prof_pid_namespace)},
 	{NAME("prof_recent_alloc_max"),	CTL(opt_prof_recent_alloc_max)},
 	{NAME("prof_stats"),	CTL(opt_prof_stats)},
 	{NAME("prof_sys_thread_name"),	CTL(opt_prof_sys_thread_name)},
@@ -494,7 +508,8 @@ static const ctl_named_node_t opt_node[] = {
 	{NAME("lg_san_uaf_align"),	CTL(opt_lg_san_uaf_align)},
 	{NAME("zero_realloc"),	CTL(opt_zero_realloc)},
 	{NAME("debug_double_free_max_scan"),
-		CTL(opt_debug_double_free_max_scan)}
+		CTL(opt_debug_double_free_max_scan)},
+	{NAME("malloc_conf"),	CHILD(named, opt_malloc_conf)}
 };
 
 static const ctl_named_node_t	tcache_node[] = {
@@ -2196,6 +2211,8 @@ CTL_RO_NL_CGEN(config_prof, opt_prof_thread_active_init,
 CTL_RO_NL_CGEN(config_prof, opt_prof_bt_max, opt_prof_bt_max, unsigned)
 CTL_RO_NL_CGEN(config_prof, opt_lg_prof_sample, opt_lg_prof_sample, size_t)
 CTL_RO_NL_CGEN(config_prof, opt_prof_accum, opt_prof_accum, bool)
+CTL_RO_NL_CGEN(config_prof, opt_prof_pid_namespace, opt_prof_pid_namespace,
+    bool)
 CTL_RO_NL_CGEN(config_prof, opt_lg_prof_interval, opt_lg_prof_interval, ssize_t)
 CTL_RO_NL_CGEN(config_prof, opt_prof_gdump, opt_prof_gdump, bool)
 CTL_RO_NL_CGEN(config_prof, opt_prof_final, opt_prof_final, bool)
@@ -2212,6 +2229,17 @@ CTL_RO_NL_CGEN(config_uaf_detection, opt_lg_san_uaf_align,
     opt_lg_san_uaf_align, ssize_t)
 CTL_RO_NL_GEN(opt_zero_realloc,
     zero_realloc_mode_names[opt_zero_realloc_action], const char *)
+
+/* malloc_conf options */
+CTL_RO_NL_CGEN(opt_malloc_conf_symlink, opt_malloc_conf_symlink,
+    opt_malloc_conf_symlink, const char *)
+CTL_RO_NL_CGEN(opt_malloc_conf_env_var, opt_malloc_conf_env_var,
+    opt_malloc_conf_env_var, const char *)
+CTL_RO_NL_CGEN(je_malloc_conf, opt_malloc_conf_global_var, je_malloc_conf,
+    const char *)
+CTL_RO_NL_CGEN(je_malloc_conf_2_conf_harder,
+    opt_malloc_conf_global_var_2_conf_harder, je_malloc_conf_2_conf_harder,
+    const char *)
 
 /******************************************************************************/
 
@@ -2939,17 +2967,6 @@ arena_i_decay_ms_ctl_impl(tsd_t *tsd, const size_t *mib, size_t miblen,
 		if (newlen != sizeof(ssize_t)) {
 			ret = EINVAL;
 			goto label_return;
-		}
-		if (arena_is_huge(arena_ind) && *(ssize_t *)newp > 0) {
-			/*
-			 * By default the huge arena purges eagerly.  If it is
-			 * set to non-zero decay time afterwards, background
-			 * thread might be needed.
-			 */
-			if (background_thread_create(tsd, arena_ind)) {
-				ret = EFAULT;
-				goto label_return;
-			}
 		}
 
 		if (arena_decay_ms_set(tsd_tsdn(tsd), arena, state,

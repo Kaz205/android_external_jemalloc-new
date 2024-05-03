@@ -358,17 +358,38 @@ arena_extent_alloc_large(tsdn_t *tsdn, arena_t *arena, size_t usize,
 
 	bool guarded = san_large_extent_decide_guard(tsdn,
 	    arena_get_ehooks(arena), esize, alignment);
-	edata_t *edata = pa_alloc(tsdn, &arena->pa_shard, esize, alignment,
-	    /* slab */ false, szind, zero, guarded, &deferred_work_generated);
 
-	if (edata != NULL) {
-		if (config_stats) {
-			arena_large_malloc_stats_update(tsdn, arena, usize);
-		}
+	/*
+	 * - if usize >= opt_calloc_madvise_threshold,
+	 *     - pa_alloc(..., zero_override = zero, ...)
+	 * - otherwise,
+	 *     - pa_alloc(..., zero_override = false, ...)
+	 *     - use memset() to zero out memory if zero == true.
+	 */
+	bool zero_override = zero && (usize >= opt_calloc_madvise_threshold);
+	edata_t *edata = pa_alloc(tsdn, &arena->pa_shard, esize, alignment,
+	    /* slab */ false, szind, zero_override, guarded,
+	    &deferred_work_generated);
+
+	if (edata == NULL) {
+		return NULL;
 	}
 
-	if (edata != NULL && sz_large_pad != 0) {
+	if (config_stats) {
+		arena_large_malloc_stats_update(tsdn, arena, usize);
+	}
+	if (sz_large_pad != 0) {
 		arena_cache_oblivious_randomize(tsdn, arena, edata, alignment);
+	}
+	/*
+	 * This branch should be put after the randomization so that the addr
+	 * returned by edata_addr_get() has already be randomized,
+	 * if cache_oblivious is enabled.
+	 */
+	if (zero && !zero_override && !edata_zeroed_get(edata)) {
+		void *addr = edata_addr_get(edata);
+		size_t usize = edata_usize_get(edata);
+		memset(addr, 0, usize);
 	}
 
 	return edata;
@@ -1018,7 +1039,7 @@ arena_bin_choose(tsdn_t *tsdn, arena_t *arena, szind_t binind,
 
 void
 arena_cache_bin_fill_small(tsdn_t *tsdn, arena_t *arena,
-    cache_bin_t *cache_bin, szind_t binind, const unsigned nfill) {
+    cache_bin_t *cache_bin, szind_t binind, const cache_bin_sz_t nfill) {
 	assert(cache_bin_ncached_get_local(cache_bin) == 0);
 	assert(nfill != 0);
 
@@ -1055,7 +1076,7 @@ arena_cache_bin_fill_small(tsdn_t *tsdn, arena_t *arena,
 	bool made_progress = true;
 	edata_t *fresh_slab = NULL;
 	bool alloc_and_retry = false;
-	unsigned filled = 0;
+	cache_bin_sz_t filled = 0;
 	unsigned binshard;
 	bin_t *bin = arena_bin_choose(tsdn, arena, binind, &binshard);
 
@@ -1843,14 +1864,6 @@ arena_init_huge(arena_t *a0) {
 	}
 
 	return huge_enabled;
-}
-
-bool
-arena_is_huge(unsigned arena_ind) {
-	if (huge_arena_ind == 0) {
-		return false;
-	}
-	return (arena_ind == huge_arena_ind);
 }
 
 bool
