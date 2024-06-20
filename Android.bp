@@ -128,6 +128,7 @@ android_product_variables = {
 
 cc_defaults {
     name: "jemalloc5_defaults",
+    defaults: ["linux_bionic_supported"],
     host_supported: true,
     c_std: "c11",
     native_bridge_supported: true,
@@ -138,7 +139,7 @@ cc_defaults {
             cflags: android_common_cflags,
             product_variables: android_product_variables,
         },
-        linux_bionic: {
+        linux_glibc: {
             enabled: true,
         },
     },
@@ -426,10 +427,8 @@ cc_test {
     test_per_src: true,
 
     target: {
-        linux_bionic: {
-            enabled: true,
-        },
         linux_glibc: {
+            enabled: true,
             // The sanitizer does not work for these tests on the host.
             sanitize: {
                 never: true,
