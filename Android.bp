@@ -208,10 +208,6 @@ cc_library {
             system_shared_libs: [],
         },
     },
-
-    apex_available: [
-        "com.android.runtime",
-    ],
 }
 
 //-----------------------------------------------------------------------
