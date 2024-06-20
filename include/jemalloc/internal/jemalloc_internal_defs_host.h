@@ -421,9 +421,7 @@
 /*
  * Defined if strerror_r returns char * if _GNU_SOURCE is defined.
  */
-#ifdef __GLIBC__
 #define JEMALLOC_STRERROR_R_RETURNS_CHAR_WITH_GNU_SOURCE 
-#endif
 
 /* Performs additional safety checks when defined. */
 /* #undef JEMALLOC_OPT_SAFETY_CHECKS */
