@@ -150,6 +150,7 @@ cc_defaults {
 lib_src_files = [
     "src/arena.c",
     "src/background_thread.c",
+    "src/batcher.c",
     "src/base.c",
     "src/bin.c",
     "src/bin_info.c",
