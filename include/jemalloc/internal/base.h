@@ -6,6 +6,27 @@
 #include "jemalloc/internal/ehooks.h"
 #include "jemalloc/internal/mutex.h"
 
+enum metadata_thp_mode_e {
+	metadata_thp_disabled   = 0,
+	/*
+	 * Lazily enable hugepage for metadata. To avoid high RSS caused by THP
+	 * + low usage arena (i.e. THP becomes a significant percentage), the
+	 * "auto" option only starts using THP after a base allocator used up
+	 * the first THP region.  Starting from the second hugepage (in a single
+	 * arena), "auto" behaves the same as "always", i.e. madvise hugepage
+	 * right away.
+	 */
+	metadata_thp_auto       = 1,
+	metadata_thp_always     = 2,
+	metadata_thp_mode_limit = 3
+};
+typedef enum metadata_thp_mode_e metadata_thp_mode_t;
+
+#define METADATA_THP_DEFAULT metadata_thp_disabled
+extern metadata_thp_mode_t opt_metadata_thp;
+extern const char *metadata_thp_mode_names[];
+
+
 /* Embedded at the beginning of every block of base-managed virtual memory. */
 typedef struct base_block_s base_block_t;
 struct base_block_s {
@@ -34,6 +55,8 @@ struct base_s {
 	/* Protects base_alloc() and base_stats_get() operations. */
 	malloc_mutex_t mtx;
 
+	/* Using THP when true (metadata_thp auto mode). */
+	bool auto_thp_switched;
 	/*
 	 * Most recent size class in the series of increasingly large base
 	 * extents.  Logarithmic spacing between subsequent allocations ensures
@@ -59,11 +82,18 @@ struct base_s {
 	size_t rtree_allocated;
 	size_t resident;
 	size_t mapped;
+	/* Number of THP regions touched. */
+	size_t n_thp;
 };
 
 static inline unsigned
 base_ind_get(const base_t *base) {
 	return ehooks_ind_get(&base->ehooks);
+}
+
+static inline bool
+metadata_thp_enabled(void) {
+	return (opt_metadata_thp != metadata_thp_disabled);
 }
 
 base_t *b0get(void);
@@ -81,7 +111,7 @@ void *b0_alloc_tcache_stack(tsdn_t *tsdn, size_t size);
 void b0_dalloc_tcache_stack(tsdn_t *tsdn, void *tcache_stack);
 void base_stats_get(tsdn_t *tsdn, base_t *base, size_t *allocated,
     size_t *edata_allocated, size_t *rtree_allocated, size_t *resident,
-    size_t *mapped);
+    size_t *mapped, size_t *n_thp);
 void base_prefork(tsdn_t *tsdn, base_t *base);
 void base_postfork_parent(tsdn_t *tsdn, base_t *base);
 void base_postfork_child(tsdn_t *tsdn, base_t *base);

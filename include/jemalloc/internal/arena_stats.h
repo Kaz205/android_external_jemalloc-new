@@ -55,6 +55,7 @@ struct arena_stats_s {
 	size_t			metadata_edata; /* Derived. */
 	size_t			metadata_rtree; /* Derived. */
 	size_t			resident; /* Derived. */
+	size_t			metadata_thp; /* Derived. */
 	size_t			mapped; /* Derived. */
 
 	atomic_zu_t		internal;

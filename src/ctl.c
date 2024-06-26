@@ -110,6 +110,7 @@ CTL_PROTO(opt_hpa_sec_max_alloc)
 CTL_PROTO(opt_hpa_sec_max_bytes)
 CTL_PROTO(opt_hpa_sec_bytes_after_flush)
 CTL_PROTO(opt_hpa_sec_batch_fill_extra)
+CTL_PROTO(opt_metadata_thp)
 CTL_PROTO(opt_retain)
 CTL_PROTO(opt_dss)
 CTL_PROTO(opt_narenas)
@@ -142,6 +143,7 @@ CTL_PROTO(opt_tcache_gc_incr_bytes)
 CTL_PROTO(opt_tcache_gc_delay_bytes)
 CTL_PROTO(opt_lg_tcache_flush_small_div)
 CTL_PROTO(opt_lg_tcache_flush_large_div)
+CTL_PROTO(opt_thp)
 CTL_PROTO(opt_lg_extent_max_active_fit)
 CTL_PROTO(opt_prof)
 CTL_PROTO(opt_prof_prefix)
@@ -305,6 +307,7 @@ CTL_PROTO(stats_arenas_i_base)
 CTL_PROTO(stats_arenas_i_internal)
 CTL_PROTO(stats_arenas_i_metadata_edata)
 CTL_PROTO(stats_arenas_i_metadata_rtree)
+CTL_PROTO(stats_arenas_i_metadata_thp)
 CTL_PROTO(stats_arenas_i_tcache_bytes)
 CTL_PROTO(stats_arenas_i_tcache_stashed_bytes)
 CTL_PROTO(stats_arenas_i_resident)
@@ -319,6 +322,7 @@ CTL_PROTO(stats_background_thread_run_interval)
 CTL_PROTO(stats_metadata)
 CTL_PROTO(stats_metadata_edata)
 CTL_PROTO(stats_metadata_rtree)
+CTL_PROTO(stats_metadata_thp)
 CTL_PROTO(stats_resident)
 CTL_PROTO(stats_mapped)
 CTL_PROTO(stats_retained)
@@ -454,6 +458,7 @@ static const ctl_named_node_t opt_node[] = {
 		CTL(opt_hpa_sec_bytes_after_flush)},
 	{NAME("hpa_sec_batch_fill_extra"),
 		CTL(opt_hpa_sec_batch_fill_extra)},
+	{NAME("metadata_thp"),	CTL(opt_metadata_thp)},
 	{NAME("retain"),	CTL(opt_retain)},
 	{NAME("dss"),		CTL(opt_dss)},
 	{NAME("narenas"),	CTL(opt_narenas)},
@@ -491,6 +496,7 @@ static const ctl_named_node_t opt_node[] = {
 		CTL(opt_lg_tcache_flush_small_div)},
 	{NAME("lg_tcache_flush_large_div"),
 		CTL(opt_lg_tcache_flush_large_div)},
+	{NAME("thp"),		CTL(opt_thp)},
 	{NAME("lg_extent_max_active_fit"), CTL(opt_lg_extent_max_active_fit)},
 	{NAME("prof"),		CTL(opt_prof)},
 	{NAME("prof_prefix"),	CTL(opt_prof_prefix)},
@@ -834,6 +840,7 @@ static const ctl_named_node_t stats_arenas_i_node[] = {
 	{NAME("internal"),	CTL(stats_arenas_i_internal)},
 	{NAME("metadata_edata"),	CTL(stats_arenas_i_metadata_edata)},
 	{NAME("metadata_rtree"),	CTL(stats_arenas_i_metadata_rtree)},
+	{NAME("metadata_thp"),	CTL(stats_arenas_i_metadata_thp)},
 	{NAME("tcache_bytes"),	CTL(stats_arenas_i_tcache_bytes)},
 	{NAME("tcache_stashed_bytes"),
 	    CTL(stats_arenas_i_tcache_stashed_bytes)},
@@ -880,6 +887,7 @@ static const ctl_named_node_t stats_node[] = {
 	{NAME("metadata"),	CTL(stats_metadata)},
 	{NAME("metadata_edata"),	CTL(stats_metadata_edata)},
 	{NAME("metadata_rtree"),	CTL(stats_metadata_rtree)},
+	{NAME("metadata_thp"),	CTL(stats_metadata_thp)},
 	{NAME("resident"),	CTL(stats_resident)},
 	{NAME("mapped"),	CTL(stats_mapped)},
 	{NAME("retained"),	CTL(stats_retained)},
@@ -1176,6 +1184,7 @@ MUTEX_PROF_ARENA_MUTEXES
 			sdstats->astats.metadata_rtree += astats->astats
 			    .metadata_rtree;
 			sdstats->astats.resident += astats->astats.resident;
+			sdstats->astats.metadata_thp += astats->astats.metadata_thp;
 			ctl_accum_atomic_zu(&sdstats->astats.internal,
 			    &astats->astats.internal);
 		} else {
@@ -1392,6 +1401,8 @@ ctl_refresh(tsdn_t *tsdn) {
 		ctl_stats->metadata_rtree = ctl_sarena->astats->astats
 		    .metadata_rtree;
 		ctl_stats->resident = ctl_sarena->astats->astats.resident;
+		ctl_stats->metadata_thp =
+		    ctl_sarena->astats->astats.metadata_thp;
 		ctl_stats->mapped = ctl_sarena->astats->astats.mapped;
 		ctl_stats->retained = ctl_sarena->astats->astats
 		    .pa_shard_stats.pac_stats.retained;
@@ -2191,6 +2202,8 @@ CTL_RO_NL_GEN(opt_hpa_sec_bytes_after_flush, opt_hpa_sec_opts.bytes_after_flush,
 CTL_RO_NL_GEN(opt_hpa_sec_batch_fill_extra, opt_hpa_sec_opts.batch_fill_extra,
     size_t)
 
+CTL_RO_NL_GEN(opt_metadata_thp, metadata_thp_mode_names[opt_metadata_thp],
+    const char *)
 CTL_RO_NL_GEN(opt_retain, opt_retain, bool)
 CTL_RO_NL_GEN(opt_dss, opt_dss, const char *)
 CTL_RO_NL_GEN(opt_narenas, opt_narenas, unsigned)
@@ -2231,6 +2244,7 @@ CTL_RO_NL_GEN(opt_lg_tcache_flush_small_div, opt_lg_tcache_flush_small_div,
     unsigned)
 CTL_RO_NL_GEN(opt_lg_tcache_flush_large_div, opt_lg_tcache_flush_large_div,
     unsigned)
+CTL_RO_NL_GEN(opt_thp, thp_mode_names[opt_thp], const char *)
 CTL_RO_NL_GEN(opt_lg_extent_max_active_fit, opt_lg_extent_max_active_fit,
     size_t)
 CTL_RO_NL_CGEN(config_prof, opt_prof, opt_prof, bool)
@@ -3719,6 +3733,7 @@ CTL_RO_CGEN(config_stats, stats_metadata_edata, ctl_stats->metadata_edata,
     size_t)
 CTL_RO_CGEN(config_stats, stats_metadata_rtree, ctl_stats->metadata_rtree,
     size_t)
+CTL_RO_CGEN(config_stats, stats_metadata_thp, ctl_stats->metadata_thp, size_t)
 CTL_RO_CGEN(config_stats, stats_resident, ctl_stats->resident, size_t)
 CTL_RO_CGEN(config_stats, stats_mapped, ctl_stats->mapped, size_t)
 CTL_RO_CGEN(config_stats, stats_retained, ctl_stats->retained, size_t)
@@ -3787,6 +3802,8 @@ CTL_RO_CGEN(config_stats, stats_arenas_i_metadata_edata,
     arenas_i(mib[2])->astats->astats.metadata_edata, size_t)
 CTL_RO_CGEN(config_stats, stats_arenas_i_metadata_rtree,
     arenas_i(mib[2])->astats->astats.metadata_rtree, size_t)
+CTL_RO_CGEN(config_stats, stats_arenas_i_metadata_thp,
+    arenas_i(mib[2])->astats->astats.metadata_thp, size_t)
 CTL_RO_CGEN(config_stats, stats_arenas_i_tcache_bytes,
     arenas_i(mib[2])->astats->astats.tcache_bytes, size_t)
 CTL_RO_CGEN(config_stats, stats_arenas_i_tcache_stashed_bytes,

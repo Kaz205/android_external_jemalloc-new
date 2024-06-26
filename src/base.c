@@ -6,12 +6,35 @@
 #include "jemalloc/internal/mutex.h"
 #include "jemalloc/internal/sz.h"
 
+/*
+ * In auto mode, arenas switch to huge pages for the base allocator on the
+ * second base block.  a0 switches to thp on the 5th block (after 20 megabytes
+ * of metadata), since more metadata (e.g. rtree nodes) come from a0's base.
+ */
+
+#define BASE_AUTO_THP_THRESHOLD    2
+#define BASE_AUTO_THP_THRESHOLD_A0 5
+
 /******************************************************************************/
 /* Data. */
 
 static base_t *b0;
 
+metadata_thp_mode_t opt_metadata_thp = METADATA_THP_DEFAULT;
+
+const char *metadata_thp_mode_names[] = {
+	"disabled",
+	"auto",
+	"always"
+};
+
 /******************************************************************************/
+
+static inline bool
+metadata_thp_madvise(void) {
+	return (metadata_thp_enabled() &&
+	    (init_system_thp_mode == thp_mode_default));
+}
 
 static void *
 base_map(tsdn_t *tsdn, ehooks_t *ehooks, unsigned ind, size_t size) {
@@ -24,6 +47,9 @@ base_map(tsdn_t *tsdn, ehooks_t *ehooks, unsigned ind, size_t size) {
 	size_t alignment = HUGEPAGE;
 	if (ehooks_are_default(ehooks)) {
 		addr = extent_alloc_mmap(NULL, size, alignment, &zero, &commit);
+		if (have_madvise_huge && addr) {
+			pages_set_thp_state(addr, size);
+		}
 	} else {
 		addr = ehooks_alloc(tsdn, ehooks, NULL, size, alignment, &zero,
 		    &commit);
@@ -76,7 +102,12 @@ base_unmap(tsdn_t *tsdn, ehooks_t *ehooks, unsigned ind, void *addr,
 		/* Nothing worked.  That's the application's problem. */
 	}
 label_done:
-	return;
+	if (metadata_thp_madvise()) {
+		/* Set NOHUGEPAGE after unmap to avoid kernel defrag. */
+		assert(((uintptr_t)addr & HUGEPAGE_MASK) == 0 &&
+		    (size & HUGEPAGE_MASK) == 0);
+		pages_nohuge(addr, size);
+	}
 }
 
 static inline bool
@@ -112,6 +143,42 @@ base_get_num_blocks(base_t *base, bool with_new_block) {
 	}
 
 	return n_blocks;
+}
+
+static void
+base_auto_thp_switch(tsdn_t *tsdn, base_t *base) {
+	assert(opt_metadata_thp == metadata_thp_auto);
+	malloc_mutex_assert_owner(tsdn, &base->mtx);
+	if (base->auto_thp_switched) {
+		return;
+	}
+	/* Called when adding a new block. */
+	bool should_switch;
+	if (base_ind_get(base) != 0) {
+		should_switch = (base_get_num_blocks(base, true) ==
+		    BASE_AUTO_THP_THRESHOLD);
+	} else {
+		should_switch = (base_get_num_blocks(base, true) ==
+		    BASE_AUTO_THP_THRESHOLD_A0);
+	}
+	if (!should_switch) {
+		return;
+	}
+
+	base->auto_thp_switched = true;
+	assert(!config_stats || base->n_thp == 0);
+	/* Make the initial blocks THP lazily. */
+	base_block_t *block = base->blocks;
+	while (block != NULL) {
+		assert((block->size & HUGEPAGE_MASK) == 0);
+		pages_huge(block, block->size);
+		if (config_stats) {
+			base->n_thp += HUGEPAGE_CEILING(block->size -
+			    edata_bsize_get(&block->edata)) >> LG_HUGEPAGE;
+		}
+		block = block->next;
+		assert(block == NULL || (base_ind_get(base) == 0));
+	}
 }
 
 static void *
@@ -189,6 +256,13 @@ base_extent_bump_alloc_post(tsdn_t *tsdn, base_t *base, edata_t *edata,
 		    PAGE_CEILING((uintptr_t)addr - gap_size);
 		assert(base->allocated <= base->resident);
 		assert(base->resident <= base->mapped);
+		if (metadata_thp_madvise() && (opt_metadata_thp ==
+		    metadata_thp_always || base->auto_thp_switched)) {
+			base->n_thp += (HUGEPAGE_CEILING((uintptr_t)addr + size)
+			    - HUGEPAGE_CEILING((uintptr_t)addr - gap_size)) >>
+			    LG_HUGEPAGE;
+			assert(base->mapped >= base->n_thp << LG_HUGEPAGE);
+		}
 	}
 }
 
@@ -237,6 +311,24 @@ base_block_alloc(tsdn_t *tsdn, base_t *base, ehooks_t *ehooks, unsigned ind,
 		return NULL;
 	}
 
+	if (metadata_thp_madvise()) {
+		void *addr = (void *)block;
+		assert(((uintptr_t)addr & HUGEPAGE_MASK) == 0 &&
+		    (block_size & HUGEPAGE_MASK) == 0);
+		if (opt_metadata_thp == metadata_thp_always) {
+			pages_huge(addr, block_size);
+		} else if (opt_metadata_thp == metadata_thp_auto &&
+		    base != NULL) {
+			/* base != NULL indicates this is not a new base. */
+			malloc_mutex_lock(tsdn, &base->mtx);
+			base_auto_thp_switch(tsdn, base);
+			if (base->auto_thp_switched) {
+				pages_huge(addr, block_size);
+			}
+			malloc_mutex_unlock(tsdn, &base->mtx);
+		}
+	}
+
 	*pind_last = sz_psz2ind(block_size);
 	block->size = block_size;
 	block->next = NULL;
@@ -273,9 +365,16 @@ base_extent_alloc(tsdn_t *tsdn, base_t *base, size_t size, size_t alignment) {
 		base->allocated += sizeof(base_block_t);
 		base->resident += PAGE_CEILING(sizeof(base_block_t));
 		base->mapped += block->size;
-
+		if (metadata_thp_madvise() &&
+		    !(opt_metadata_thp == metadata_thp_auto
+		      && !base->auto_thp_switched)) {
+			assert(base->n_thp > 0);
+			base->n_thp += HUGEPAGE_CEILING(sizeof(base_block_t)) >>
+			    LG_HUGEPAGE;
+		}
 		assert(base->allocated <= base->resident);
 		assert(base->resident <= base->mapped);
+		assert(base->n_thp << LG_HUGEPAGE <= base->mapped);
 	}
 	return &block->edata;
 }
@@ -324,6 +423,7 @@ base_new(tsdn_t *tsdn, unsigned ind, const extent_hooks_t *extent_hooks,
 	base->pind_last = pind_last;
 	base->extent_sn_next = extent_sn_next;
 	base->blocks = block;
+	base->auto_thp_switched = false;
 	for (szind_t i = 0; i < SC_NSIZES; i++) {
 		edata_heap_new(&base->avail[i]);
 	}
@@ -335,8 +435,12 @@ base_new(tsdn_t *tsdn, unsigned ind, const extent_hooks_t *extent_hooks,
 		base->allocated = sizeof(base_block_t);
 		base->resident = PAGE_CEILING(sizeof(base_block_t));
 		base->mapped = block->size;
+		base->n_thp = (opt_metadata_thp == metadata_thp_always) &&
+		    metadata_thp_madvise() ? HUGEPAGE_CEILING(sizeof(base_block_t))
+		    >> LG_HUGEPAGE : 0;
 		assert(base->allocated <= base->resident);
 		assert(base->resident <= base->mapped);
+		assert(base->n_thp << LG_HUGEPAGE <= base->mapped);
 	}
 
 	/* Locking here is only necessary because of assertions. */
@@ -530,7 +634,7 @@ b0_dalloc_tcache_stack(tsdn_t *tsdn, void *tcache_stack) {
 void
 base_stats_get(tsdn_t *tsdn, base_t *base, size_t *allocated,
     size_t *edata_allocated, size_t *rtree_allocated, size_t *resident,
-    size_t *mapped) {
+    size_t *mapped, size_t *n_thp) {
 	cassert(config_stats);
 
 	malloc_mutex_lock(tsdn, &base->mtx);
@@ -542,6 +646,7 @@ base_stats_get(tsdn_t *tsdn, base_t *base, size_t *allocated,
 	*rtree_allocated = base->rtree_allocated;
 	*resident = base->resident;
 	*mapped = base->mapped;
+	*n_thp = base->n_thp;
 	malloc_mutex_unlock(tsdn, &base->mtx);
 }
 

@@ -60,6 +60,7 @@ typedef struct ctl_stats_s {
 	size_t metadata;
 	size_t metadata_edata;
 	size_t metadata_rtree;
+	size_t metadata_thp;
 	size_t resident;
 	size_t mapped;
 	size_t retained;

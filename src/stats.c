@@ -1096,7 +1096,7 @@ stats_arena_print(emitter_t *emitter, unsigned i, bool bins, bool large,
 	ssize_t dirty_decay_ms, muzzy_decay_ms;
 	size_t page, pactive, pdirty, pmuzzy, mapped, retained;
 	size_t base, internal, resident, metadata_edata, metadata_rtree,
-	    extent_avail;
+	    metadata_thp, extent_avail;
 	uint64_t dirty_npurge, dirty_nmadvise, dirty_purged;
 	uint64_t muzzy_npurge, muzzy_nmadvise, muzzy_purged;
 	size_t small_allocated;
@@ -1398,6 +1398,7 @@ stats_arena_print(emitter_t *emitter, unsigned i, bool bins, bool large,
 	GET_AND_EMIT_MEM_STAT(internal)
 	GET_AND_EMIT_MEM_STAT(metadata_edata)
 	GET_AND_EMIT_MEM_STAT(metadata_rtree)
+	GET_AND_EMIT_MEM_STAT(metadata_thp)
 	GET_AND_EMIT_MEM_STAT(tcache_bytes)
 	GET_AND_EMIT_MEM_STAT(tcache_stashed_bytes)
 	GET_AND_EMIT_MEM_STAT(resident)
@@ -1588,6 +1589,7 @@ stats_general_print(emitter_t *emitter) {
 	OPT_WRITE_SIZE_T("hpa_sec_max_bytes")
 	OPT_WRITE_SIZE_T("hpa_sec_bytes_after_flush")
 	OPT_WRITE_SIZE_T("hpa_sec_batch_fill_extra")
+	OPT_WRITE_CHAR_P("metadata_thp")
 	OPT_WRITE_INT64("mutex_max_spin")
 	OPT_WRITE_BOOL_MUTABLE("background_thread", "background_thread")
 	OPT_WRITE_SSIZE_T_MUTABLE("dirty_decay_ms", "arenas.dirty_decay_ms")
@@ -1613,6 +1615,7 @@ stats_general_print(emitter_t *emitter) {
 	OPT_WRITE_UNSIGNED("lg_tcache_flush_small_div")
 	OPT_WRITE_UNSIGNED("lg_tcache_flush_large_div")
 	OPT_WRITE_UNSIGNED("debug_double_free_max_scan")
+	OPT_WRITE_CHAR_P("thp")
 	OPT_WRITE_BOOL("prof")
 	OPT_WRITE_UNSIGNED("prof_bt_max")
 	OPT_WRITE_CHAR_P("prof_prefix")
@@ -1784,7 +1787,7 @@ stats_print_helper(emitter_t *emitter, bool merged, bool destroyed,
 	 * the transition to the emitter code.
 	 */
 	size_t allocated, active, metadata, metadata_edata, metadata_rtree,
-	    resident, mapped, retained;
+	    metadata_thp, resident, mapped, retained;
 	size_t num_background_threads;
 	size_t zero_reallocs;
 	uint64_t background_thread_num_runs, background_thread_run_interval;
@@ -1794,6 +1797,7 @@ stats_print_helper(emitter_t *emitter, bool merged, bool destroyed,
 	CTL_GET("stats.metadata", &metadata, size_t);
 	CTL_GET("stats.metadata_edata", &metadata_edata, size_t);
 	CTL_GET("stats.metadata_rtree", &metadata_rtree, size_t);
+	CTL_GET("stats.metadata_thp", &metadata_thp, size_t);
 	CTL_GET("stats.resident", &resident, size_t);
 	CTL_GET("stats.mapped", &mapped, size_t);
 	CTL_GET("stats.retained", &retained, size_t);
@@ -1822,6 +1826,8 @@ stats_print_helper(emitter_t *emitter, bool merged, bool destroyed,
 	    &metadata_edata);
 	emitter_json_kv(emitter, "metadata_rtree", emitter_type_size,
 	    &metadata_rtree);
+	emitter_json_kv(emitter, "metadata_thp", emitter_type_size,
+	    &metadata_thp);
 	emitter_json_kv(emitter, "resident", emitter_type_size, &resident);
 	emitter_json_kv(emitter, "mapped", emitter_type_size, &mapped);
 	emitter_json_kv(emitter, "retained", emitter_type_size, &retained);
@@ -1829,9 +1835,9 @@ stats_print_helper(emitter_t *emitter, bool merged, bool destroyed,
 	    &zero_reallocs);
 
 	emitter_table_printf(emitter, "Allocated: %zu, active: %zu, "
-	    "metadata: %zu (edata %zu, rtree %zu), resident: %zu, "
+	    "metadata: %zu (n_thp %zu, edata %zu, rtree %zu), resident: %zu, "
 	    "mapped: %zu, retained: %zu\n", allocated, active, metadata,
-		metadata_edata, metadata_rtree, resident, mapped,
+		metadata_thp, metadata_edata, metadata_rtree, resident, mapped,
 	    retained);
 
 	/* Strange behaviors */
